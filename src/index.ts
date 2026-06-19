@@ -1,5 +1,5 @@
 import Plugin from '@jbrowse/core/Plugin'
-import { isAbstractMenuManager } from '@jbrowse/core/util'
+import { isAbstractMenuManager, isElectron } from '@jbrowse/core/util'
 import { getRoot, getSnapshot } from '@jbrowse/mobx-state-tree'
 
 import { toDesktopSnapshot } from './util'
@@ -87,7 +87,10 @@ export default class HubsViewerPlugin extends Plugin {
   }
 
   configure(pluginManager: PluginManager) {
-    if (isAbstractMenuManager(pluginManager.rootModel)) {
+    // jbrowse-web only. In desktop you'd just save the session, and an exported
+    // .jbrowse file carries this plugin in its plugins list, so an older desktop
+    // would otherwise load and run this menu code when opening that file.
+    if (!isElectron && isAbstractMenuManager(pluginManager.rootModel)) {
       pluginManager.rootModel.appendToMenu('File', {
         label: 'Download desktop session (.jbrowse)',
         onClick: (session: AbstractSessionModel) => {
