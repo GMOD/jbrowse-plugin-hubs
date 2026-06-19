@@ -1,0 +1,33 @@
+name: Publish to npm
+
+# Publishes on the v* tag that `pnpm version patch` pushes (via the postversion
+# hook). Uses npm trusted publishing (OIDC) — no NPM_TOKEN secret required.
+# One-time setup on npmjs.com: package settings > Trusted Publishers > add this
+# repo (cmdcolin/jbrowse-plugin-hubs) and workflow (publish.yml).
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+      # trusted publishing (OIDC) requires npm >= 11.5.1
+      - run: npm install -g npm@latest
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: npm publish --provenance --access public
