@@ -1,12 +1,36 @@
 import Plugin from '@jbrowse/core/Plugin'
-import PluginManager from '@jbrowse/core/PluginManager'
+import { isAbstractMenuManager } from '@jbrowse/core/util'
+import { getRoot, getSnapshot } from '@jbrowse/mobx-state-tree'
 
+import { toDesktopSnapshot } from './util'
 import { version } from '../package.json'
+
+import type PluginManager from '@jbrowse/core/PluginManager'
+import type { AbstractSessionModel } from '@jbrowse/core/util'
+import type { IAnyStateTreeNode } from '@jbrowse/mobx-state-tree'
 
 interface Session {
   makeConnection: (conf: unknown) => void
   addConnectionConf: (conf: unknown) => void
   connections: { connectionId: string }[]
+}
+
+// Serializes the current web session as a desktop `.jbrowse` file. genomes
+// sessions are config-shaped already, so this just folds the live session into
+// a defaultSession and downloads it; desktop opens it via File > Open session.
+function downloadDesktopSession(session: AbstractSessionModel) {
+  const { jbrowse } = getRoot<{ jbrowse: IAnyStateTreeNode }>(session)
+  const snap = toDesktopSnapshot(
+    getSnapshot<Record<string, unknown>>(jbrowse),
+    getSnapshot<Record<string, unknown>>(session),
+  )
+  const anchor = document.createElement('a')
+  anchor.href = URL.createObjectURL(
+    new Blob([JSON.stringify(snap, null, 2)], { type: 'application/json' }),
+  )
+  anchor.download = 'session.jbrowse'
+  anchor.click()
+  URL.revokeObjectURL(anchor.href)
 }
 
 function getGenArkConfigUrl(accession: string) {
@@ -62,5 +86,14 @@ export default class HubsViewerPlugin extends Plugin {
     )
   }
 
-  configure(_pluginManager: PluginManager) {}
+  configure(pluginManager: PluginManager) {
+    if (isAbstractMenuManager(pluginManager.rootModel)) {
+      pluginManager.rootModel.appendToMenu('File', {
+        label: 'Download desktop session (.jbrowse)',
+        onClick: (session: AbstractSessionModel) => {
+          downloadDesktopSession(session)
+        },
+      })
+    }
+  }
 }
