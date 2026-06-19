@@ -2,6 +2,10 @@
   "version": "1.0.8",
   "license": "MIT",
   "name": "@cmdcolin/jbrowse-plugin-hubs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GMOD/jbrowse-plugin-hubs.git"
+  },
   "keywords": [
     "jbrowse",
     "jbrowse2"
