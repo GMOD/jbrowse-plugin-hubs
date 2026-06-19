@@ -3,7 +3,7 @@ name: Publish to npm
 # Publishes on the v* tag that `pnpm version patch` pushes (via the postversion
 # hook). Uses npm trusted publishing (OIDC) — no NPM_TOKEN secret required.
 # One-time setup on npmjs.com: package settings > Trusted Publishers > add this
-# repo (cmdcolin/jbrowse-plugin-hubs) and workflow (publish.yml).
+# repo (GMOD/jbrowse-plugin-hubs) and workflow (publish.yml).
 on:
   push:
     tags:
