@@ -2,7 +2,7 @@ import Plugin from '@jbrowse/core/Plugin'
 import { isAbstractMenuManager, isElectron } from '@jbrowse/core/util'
 import { getRoot, getSnapshot } from '@jbrowse/mobx-state-tree'
 
-import { toDesktopSnapshot } from './util'
+import { saveAs, toDesktopSnapshot } from './util'
 import { version } from '../package.json'
 
 import type PluginManager from '@jbrowse/core/PluginManager'
@@ -24,13 +24,10 @@ function downloadDesktopSession(session: AbstractSessionModel) {
     getSnapshot<Record<string, unknown>>(jbrowse),
     getSnapshot<Record<string, unknown>>(session),
   )
-  const anchor = document.createElement('a')
-  anchor.href = URL.createObjectURL(
+  saveAs(
     new Blob([JSON.stringify(snap, null, 2)], { type: 'application/json' }),
+    'session.jbrowse',
   )
-  anchor.download = 'session.jbrowse'
-  anchor.click()
-  URL.revokeObjectURL(anchor.href)
 }
 
 function getGenArkConfigUrl(accession: string) {
@@ -60,28 +57,27 @@ export default class HubsViewerPlugin extends Plugin {
   install(pluginManager: PluginManager) {
     pluginManager.addToExtensionPoint(
       'Core-handleUnrecognizedAssembly',
-      (_defaultResult, args) => {
+      (defaultResult, args) => {
         const session = args.session as Session | undefined
         const assemblyName = args.assemblyName as string | undefined
-        if (!session || !assemblyName) {
-          return
-        }
-        const uri = getConfigUrl(assemblyName)
-        if (!uri) {
-          return
-        }
-        const connectionId = `jb2hub-${assemblyName}`
-        if (!session.connections.find(f => f.connectionId === connectionId)) {
-          const conf = {
-            type: 'JB2TrackHubConnection',
-            uri,
-            name: `conn_${assemblyName}`,
-            assemblyNames: [assemblyName],
-            connectionId,
+        const uri = session && assemblyName && getConfigUrl(assemblyName)
+        if (session && assemblyName && uri) {
+          const connectionId = `jb2hub-${assemblyName}`
+          if (!session.connections.find(f => f.connectionId === connectionId)) {
+            const conf = {
+              type: 'JB2TrackHubConnection',
+              uri,
+              name: `conn_${assemblyName}`,
+              assemblyNames: [assemblyName],
+              connectionId,
+            }
+            session.addConnectionConf(conf)
+            session.makeConnection(conf)
           }
-          session.addConnectionConf(conf)
-          session.makeConnection(conf)
         }
+        // Pass the accumulator through: this extension point chains handlers, so
+        // returning undefined would clobber another plugin's result.
+        return defaultResult
       },
     )
   }

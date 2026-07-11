@@ -1,9 +1,17 @@
-export async function textfetch(url: string, arg?: RequestInit) {
-  const res = await fetch(url, arg)
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} from ${url}`)
-  }
-  return res.text()
+// Trigger a browser download of `blob` as `filename`. Mirrors the anchor-download
+// path of @jbrowse/core's saveAs: the deferred revoke avoids canceling the
+// download before the browser has read the blob (the read is async in some
+// browsers). Inlined until a published core release exports saveAs from its util.
+export function saveAs(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.rel = 'noopener'
+  anchor.click()
+  setTimeout(() => {
+    URL.revokeObjectURL(url)
+  }, 40000)
 }
 
 function asObjArray(value: unknown): Record<string, unknown>[] {
