@@ -91,12 +91,27 @@ export default class HubsViewerPlugin extends Plugin {
     // .jbrowse file carries this plugin in its plugins list, so an older desktop
     // would otherwise load and run this menu code when opening that file.
     if (!isElectron && isAbstractMenuManager(pluginManager.rootModel)) {
-      pluginManager.rootModel.appendToMenu('File', {
-        label: 'Download desktop session (.jbrowse)',
-        onClick: (session: AbstractSessionModel) => {
-          downloadDesktopSession(session)
-        },
-      })
+      // 'Tools', not 'File'. Every released core from v4.0.0 to latest defines
+      // the File menu as a thunk and appends with `menu.menuItems.push()`, which
+      // throws on a function; the throw escapes configure() and renders the app
+      // as an error page rather than costing just this menu item. Because the
+      // plugin store serves `latest/` no-cache, that took out every
+      // jbrowse.org/ucsc launch on hg38/hg19/mm39/hs1 the moment 1.0.9 shipped.
+      // core@main resolves item contributions lazily and accepts either form,
+      // but this plugin has to keep working on the releases already in the wild.
+      //
+      // Belt and braces on the same reasoning: a cosmetic menu item should never
+      // be able to cost a user their whole session.
+      try {
+        pluginManager.rootModel.appendToMenu('Tools', {
+          label: 'Download desktop session (.jbrowse)',
+          onClick: (session: AbstractSessionModel) => {
+            downloadDesktopSession(session)
+          },
+        })
+      } catch (e) {
+        console.error('could not add the desktop-session download item', e)
+      }
     }
   }
 }
