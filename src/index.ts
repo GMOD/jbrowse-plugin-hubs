@@ -2,7 +2,7 @@ import Plugin from '@jbrowse/core/Plugin'
 import { isAbstractMenuManager, isElectron } from '@jbrowse/core/util'
 import { getRoot, getSnapshot } from '@jbrowse/mobx-state-tree'
 
-import { toDesktopSnapshot } from './util'
+import { saveAs, toDesktopSnapshot } from './util'
 import { version } from '../package.json'
 
 import type PluginManager from '@jbrowse/core/PluginManager'
@@ -24,13 +24,10 @@ function downloadDesktopSession(session: AbstractSessionModel) {
     getSnapshot<Record<string, unknown>>(jbrowse),
     getSnapshot<Record<string, unknown>>(session),
   )
-  const anchor = document.createElement('a')
-  anchor.href = URL.createObjectURL(
+  saveAs(
     new Blob([JSON.stringify(snap, null, 2)], { type: 'application/json' }),
+    'session.jbrowse',
   )
-  anchor.download = 'session.jbrowse'
-  anchor.click()
-  URL.revokeObjectURL(anchor.href)
 }
 
 function getGenArkConfigUrl(accession: string) {
@@ -53,6 +50,49 @@ function getConfigUrl(assemblyName: string) {
   return `https://jbrowse.org/ucsc/${assemblyName}/config.json`
 }
 
+// Names already being resolved, so the extension point firing repeatedly for
+// the same assembly (it fires on every unresolved read) starts one probe, not
+// one per read. The connection itself is deduped by connectionId, but that
+// check only happens once the probe has come back.
+const pending = new Set<string>()
+
+// The url is a guess from the name, and plenty of assemblies aren't at it:
+// GenArk strain hubs (mouseStrains and friends) live under
+// /hubs/genark/<hub>/<strain>/, and a session can name an assembly this host
+// has never heard of. Connecting to a config that 404s puts a red error
+// snackbar over a session that is otherwise working, so probe first and stay
+// quiet when there's nothing there — some other handler, or the session
+// itself, may be supplying the assembly.
+async function connectIfConfigExists(
+  session: Session,
+  assemblyName: string,
+  uri: string,
+) {
+  const connectionId = `jb2hub-${assemblyName}`
+  if (
+    !pending.has(assemblyName) &&
+    !session.connections.find(f => f.connectionId === connectionId)
+  ) {
+    pending.add(assemblyName)
+    try {
+      const response = await fetch(uri, { method: 'HEAD' })
+      if (response.ok) {
+        const conf = {
+          type: 'JB2TrackHubConnection',
+          uri,
+          name: `conn_${assemblyName}`,
+          assemblyNames: [assemblyName],
+          connectionId,
+        }
+        session.addConnectionConf(conf)
+        session.makeConnection(conf)
+      }
+    } finally {
+      pending.delete(assemblyName)
+    }
+  }
+}
+
 export default class HubsViewerPlugin extends Plugin {
   name = 'HubsViewerPlugin'
   version = version
@@ -60,28 +100,23 @@ export default class HubsViewerPlugin extends Plugin {
   install(pluginManager: PluginManager) {
     pluginManager.addToExtensionPoint(
       'Core-handleUnrecognizedAssembly',
-      (_defaultResult, args) => {
+      (defaultResult, args) => {
         const session = args.session as Session | undefined
         const assemblyName = args.assemblyName as string | undefined
-        if (!session || !assemblyName) {
-          return
+        const uri = session && assemblyName && getConfigUrl(assemblyName)
+        if (session && assemblyName && uri) {
+          // the extension point is sync; the probe and the connection it may
+          // create land later, which is fine because assemblyManager re-reads
+          // reactively once the assembly shows up
+          connectIfConfigExists(session, assemblyName, uri).catch(
+            (e: unknown) => {
+              console.error(e)
+            },
+          )
         }
-        const uri = getConfigUrl(assemblyName)
-        if (!uri) {
-          return
-        }
-        const connectionId = `jb2hub-${assemblyName}`
-        if (!session.connections.find(f => f.connectionId === connectionId)) {
-          const conf = {
-            type: 'JB2TrackHubConnection',
-            uri,
-            name: `conn_${assemblyName}`,
-            assemblyNames: [assemblyName],
-            connectionId,
-          }
-          session.addConnectionConf(conf)
-          session.makeConnection(conf)
-        }
+        // Pass the accumulator through: this extension point chains handlers, so
+        // returning undefined would clobber another plugin's result.
+        return defaultResult
       },
     )
   }
