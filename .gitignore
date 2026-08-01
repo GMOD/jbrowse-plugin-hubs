@@ -126,3 +126,6 @@ cypress/screenshots
 
 meta.json
 .vscode
+
+# host-compat probe report (regenerated each run)
+host-compat.json
