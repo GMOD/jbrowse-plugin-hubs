@@ -10,7 +10,7 @@ import type { AbstractSessionModel } from '@jbrowse/core/util'
 import type { IAnyStateTreeNode } from '@jbrowse/mobx-state-tree'
 
 interface Session {
-  makeConnection: (conf: unknown) => void
+  makeConnection: (conf: unknown, initialSnapshot?: unknown) => void
   addConnectionConf: (conf: unknown) => void
   connections: { connectionId: string }[]
 }
@@ -85,7 +85,19 @@ async function connectIfConfigExists(
           connectionId,
         }
         session.addConnectionConf(conf)
-        session.makeConnection(conf)
+        // `silent`: no "Successfully loaded" snackbar. Nobody asked for this
+        // connection — it exists because a track referenced an assembly the
+        // session didn't have — so announcing it is noise over whatever the
+        // user was doing, and it lands on top of any screenshot of a hub
+        // genome. The property is newer than every released core (it landed
+        // after v4.3.0) and this plugin runs against whatever core the host
+        // page shipped, down to the v4.0.0 floor, but passing it is safe
+        // regardless: MST drops an undeclared key off a model snapshot rather
+        // than rejecting it (verified against the fork — the instance is
+        // created, the key is neither readable on it nor in its snapshot), so
+        // an older core makes the same connection it always did and keeps its
+        // toast.
+        session.makeConnection(conf, { silent: true })
       }
     } finally {
       pending.delete(assemblyName)
