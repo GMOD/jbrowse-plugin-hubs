@@ -43,64 +43,116 @@ function getGenArkConfigUrl(accession: string) {
   return `https://jbrowse.org/hubs/genark/${base}/${b1}/${b2}/${b3}/${accession}/config.json`
 }
 
-function getConfigUrl(assemblyName: string) {
+// Candidate urls for an assembly name, most preferred first. The probe below
+// takes the first that exists, so a name with no hosted config anywhere is
+// still answered by staying quiet.
+//
+// A UCSC db gets `minimal.json` ahead of `config.json`. Both carry the same
+// `assemblies` block (minimal.json is a filtered copy of config.json, tracks
+// dropped to NCBI RefSeq / GENCODE / RepeatMasker / gaps), and the assembly is
+// the whole reason this connection exists — the tracks are a bonus for the
+// panel it opens. The full config is an expensive way to learn a sequence
+// adapter: hg38 is 2.1MB against minimal's 300KB, hg19 1.35MB against 57KB,
+// hs1 603KB against 12KB, and the parse is followed by MST instantiating every
+// track config in it on the main thread (hg38 595 against 33, hs1 624 against
+// 7). hg38 alone names 239 distinct mate assemblies across its 239 synteny
+// tracks, so a session that opens a few of them pays this several times over.
+//
+// What minimal.json costs is the mate genome's long tail — conservation,
+// expression, the rest of the hub. Those are still one "Add connection" away
+// on the full config url, and nothing about this panel implied they were
+// coming. GenArk hubs have no minimal.json and don't need one; their whole
+// config is ~40KB.
+function getConfigUrls(assemblyName: string) {
   if (assemblyName.startsWith('GCA_') || assemblyName.startsWith('GCF_')) {
-    return getGenArkConfigUrl(assemblyName)
+    const url = getGenArkConfigUrl(assemblyName)
+    return url ? [url] : []
   }
-  return `https://jbrowse.org/ucsc/${assemblyName}/config.json`
+  const base = `https://jbrowse.org/ucsc/${assemblyName}`
+  return [`${base}/minimal.json`, `${base}/config.json`]
 }
 
-// Names already being resolved, so the extension point firing repeatedly for
-// the same assembly (it fires on every unresolved read) starts one probe, not
-// one per read. The connection itself is deduped by connectionId, but that
-// check only happens once the probe has come back.
-const pending = new Set<string>()
+// Every assembly name this plugin has already taken a run at, whether the probe
+// is still in flight or came back with nothing. The extension point fires on an
+// unresolved read, and `get` is read from render paths, so a name that resolves
+// to no hosted config is asked about again and again — GenArk strain hubs
+// (mouseStrains and friends) live under /hubs/genark/<hub>/<strain>/ and are not
+// at the url guessed from the name, and a session can name an assembly this host
+// has never heard of at all. Clearing this once the probe settled (what an
+// earlier `finally` did) meant the next read re-probed, i.e. one HEAD per render
+// forever for exactly the names nothing can supply.
+//
+// A name that DID resolve is also in here, and is separately deduped by
+// connectionId once the connection exists. Nothing is ever removed within a
+// session: a probe answers a question about a url that does not change within a
+// page load.
+//
+// Keyed by session, because the connection a probe created belongs to the
+// session and goes with it. A flat Set would remember a name across
+// `setSession` and leave the new session unable to resolve a genome the old one
+// had. WeakMap so a replaced session is still collectable.
+//
+// jbrowse-core@main reports each unknown name to the extension point once per
+// session, which makes this redundant there — but this plugin runs against
+// whatever core the host page shipped, down to the v4.0.0 floor, where it is
+// the only thing standing between a mistyped assembly name and an unbounded
+// request stream.
+const attempted = new WeakMap<Session, Set<string>>()
 
-// The url is a guess from the name, and plenty of assemblies aren't at it:
-// GenArk strain hubs (mouseStrains and friends) live under
-// /hubs/genark/<hub>/<strain>/, and a session can name an assembly this host
-// has never heard of. Connecting to a config that 404s puts a red error
-// snackbar over a session that is otherwise working, so probe first and stay
-// quiet when there's nothing there — some other handler, or the session
-// itself, may be supplying the assembly.
+function markAttempted(session: Session, assemblyName: string) {
+  let names = attempted.get(session)
+  if (!names) {
+    names = new Set()
+    attempted.set(session, names)
+  }
+  if (names.has(assemblyName)) {
+    return false
+  }
+  names.add(assemblyName)
+  return true
+}
+
+// Connect to the first of `uris` that exists. Connecting to a config that 404s
+// puts a red error snackbar over a session that is otherwise working, so probe
+// first and stay quiet when there's nothing there — some other handler, or the
+// session itself, may be supplying the assembly.
 async function connectIfConfigExists(
   session: Session,
   assemblyName: string,
-  uri: string,
+  uris: string[],
 ) {
   const connectionId = `jb2hub-${assemblyName}`
   if (
-    !pending.has(assemblyName) &&
-    !session.connections.find(f => f.connectionId === connectionId)
+    session.connections.find(f => f.connectionId === connectionId) ||
+    !markAttempted(session, assemblyName)
   ) {
-    pending.add(assemblyName)
-    try {
-      const response = await fetch(uri, { method: 'HEAD' })
-      if (response.ok) {
-        const conf = {
-          type: 'JB2TrackHubConnection',
-          uri,
-          name: `conn_${assemblyName}`,
-          assemblyNames: [assemblyName],
-          connectionId,
-        }
-        session.addConnectionConf(conf)
-        // `silent`: no "Successfully loaded" snackbar. Nobody asked for this
-        // connection — it exists because a track referenced an assembly the
-        // session didn't have — so announcing it is noise over whatever the
-        // user was doing, and it lands on top of any screenshot of a hub
-        // genome. The property is newer than every released core (it landed
-        // after v4.3.0) and this plugin runs against whatever core the host
-        // page shipped, down to the v4.0.0 floor, but passing it is safe
-        // regardless: MST drops an undeclared key off a model snapshot rather
-        // than rejecting it (verified against the fork — the instance is
-        // created, the key is neither readable on it nor in its snapshot), so
-        // an older core makes the same connection it always did and keeps its
-        // toast.
-        session.makeConnection(conf, { silent: true })
+    return
+  }
+  for (const uri of uris) {
+    const response = await fetch(uri, { method: 'HEAD' })
+    if (response.ok) {
+      const conf = {
+        type: 'JB2TrackHubConnection',
+        uri,
+        name: `conn_${assemblyName}`,
+        assemblyNames: [assemblyName],
+        connectionId,
       }
-    } finally {
-      pending.delete(assemblyName)
+      session.addConnectionConf(conf)
+      // `silent`: no "Successfully loaded" snackbar. Nobody asked for this
+      // connection — it exists because a track referenced an assembly the
+      // session didn't have — so announcing it is noise over whatever the
+      // user was doing, and it lands on top of any screenshot of a hub
+      // genome. The property is newer than every released core (it landed
+      // after v4.3.0) and this plugin runs against whatever core the host
+      // page shipped, down to the v4.0.0 floor, but passing it is safe
+      // regardless: MST drops an undeclared key off a model snapshot rather
+      // than rejecting it (verified against the fork — the instance is
+      // created, the key is neither readable on it nor in its snapshot), so
+      // an older core makes the same connection it always did and keeps its
+      // toast.
+      session.makeConnection(conf, { silent: true })
+      return
     }
   }
 }
@@ -115,12 +167,12 @@ export default class HubsViewerPlugin extends Plugin {
       (defaultResult, args) => {
         const session = args.session as Session | undefined
         const assemblyName = args.assemblyName as string | undefined
-        const uri = session && assemblyName && getConfigUrl(assemblyName)
-        if (session && assemblyName && uri) {
+        const uris = assemblyName ? getConfigUrls(assemblyName) : []
+        if (session && assemblyName && uris.length > 0) {
           // the extension point is sync; the probe and the connection it may
           // create land later, which is fine because assemblyManager re-reads
           // reactively once the assembly shows up
-          connectIfConfigExists(session, assemblyName, uri).catch(
+          connectIfConfigExists(session, assemblyName, uris).catch(
             (e: unknown) => {
               console.error(e)
             },
