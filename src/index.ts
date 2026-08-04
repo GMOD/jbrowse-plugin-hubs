@@ -169,10 +169,24 @@ export default class HubsViewerPlugin extends Plugin {
         const assemblyName = args.assemblyName as string | undefined
         const uris = assemblyName ? getConfigUrls(assemblyName) : []
         if (session && assemblyName && uris.length > 0) {
-          // the extension point is sync; the probe and the connection it may
-          // create land later, which is fine because assemblyManager re-reads
-          // reactively once the assembly shows up
-          connectIfConfigExists(session, assemblyName, uris).catch(
+          // The probe and the connection it may create land after this returns,
+          // which is fine because assemblyManager re-reads reactively once the
+          // assembly shows up.
+          //
+          // Returning the promise rather than the accumulator: a core that
+          // knows to look (jbrowse-core > 4.3.0) awaits it in waitForAssembly,
+          // which is what lets that wait end on an event instead of a 10s
+          // timeout. Nothing observable happens between being asked and the
+          // HEAD coming back, so a core with only the session to watch has to
+          // guess, and 10s is both too long to fail in and too short for a cold
+          // CDN. Older cores fold the return value into an accumulator they
+          // then discard, so this is inert there.
+          //
+          // Nothing else registers on this point (checked across the plugin
+          // ecosystem), so replacing the accumulator costs no other plugin its
+          // result; if that changes, a handler registered after this one still
+          // receives and can pass on whatever it is given.
+          return connectIfConfigExists(session, assemblyName, uris).catch(
             (e: unknown) => {
               console.error(e)
             },
