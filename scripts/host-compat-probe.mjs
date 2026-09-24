@@ -28,6 +28,7 @@
 //   node scripts/host-compat-probe.mjs --bundle dist/jbrowse-plugin-hubs.umd.production.min.js
 //   node scripts/host-compat-probe.mjs --bundle … --versions v4.0.0,main
 //
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -90,6 +91,35 @@ const timeout = Number(values.timeout)
 const bundle = fs.readFileSync(values.bundle, 'utf8')
 const bundleDir = path.dirname(values.bundle)
 const mainName = path.basename(values.bundle)
+const bundleIntegrity = `sha384-${crypto.createHash('sha384').update(bundle).digest('base64')}`
+
+// A core that resolves `storePlugin` through the v2 store manifest loads the
+// version it pins with that version's integrity hash, which the candidate
+// fails by construction; this answers the manifest with the candidate's hash
+function withCandidateIntegrity(value) {
+  if (Array.isArray(value)) {
+    return value.map(withCandidateIntegrity)
+  }
+  if (typeof value === 'object' && value !== null) {
+    const out = Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        withCandidateIntegrity(item),
+      ]),
+    )
+    return typeof out.url === 'string' &&
+      out.url.includes(PACKAGE_PATH) &&
+      'integrity' in out
+      ? { ...out, integrity: bundleIntegrity }
+      : out
+  }
+  return value
+}
+
+async function storeManifest(url) {
+  const response = await fetch(url)
+  return JSON.stringify(withCandidateIntegrity(await response.json()))
+}
 
 // Serves the whole local dist for the plugin's store path, not just the one
 // file: a build that code-splits fetches sibling chunks by their own hashed
@@ -99,7 +129,21 @@ async function serveCandidate(page) {
   await page.setRequestInterception(true)
   page.on('request', req => {
     const url = req.url()
-    const name = path.basename(new URL(url).pathname)
+    const { pathname } = new URL(url)
+    if (pathname.startsWith('/plugin-store/') && pathname.endsWith('.json')) {
+      storeManifest(url)
+        .then(body =>
+          req.respond({
+            status: 200,
+            contentType: 'application/json',
+            headers: { 'Access-Control-Allow-Origin': '*' },
+            body,
+          }),
+        )
+        .catch(() => req.continue().catch(() => {}))
+      return
+    }
+    const name = path.basename(pathname)
     const sibling = path.join(bundleDir, name)
     const isPluginAsset = url.includes(PACKAGE_PATH) && name.endsWith('.js')
     const body = !isPluginAsset
