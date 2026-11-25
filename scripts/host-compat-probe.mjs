@@ -25,8 +25,9 @@ import { parseArgs } from 'node:util'
 
 import { launch } from 'puppeteer-core'
 
-// The first entry is check-host-floor.mjs's FLOOR
-const DEFAULT_VERSIONS = ['v5.0.0-beta.18', 'v5.0.0-beta.23', 'main']
+import { FLOOR, NEWEST_RELEASE } from './hosts.mjs'
+
+const DEFAULT_VERSIONS = [FLOOR, NEWEST_RELEASE, 'main']
 
 // A real shipped config that names this plugin by `storePlugin`, which a
 // JBrowse 5 host resolves through the store manifest rewritten below

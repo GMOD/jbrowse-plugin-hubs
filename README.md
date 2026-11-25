@@ -13,8 +13,8 @@ Resolves a genome a JBrowse session names but does not hold, from the configs
 ## Hosts
 
 Each release is an ES module for JBrowse 5, built against `v5.0.0-beta.18`
-(`scripts/check-host-floor.mjs`). A JBrowse 5 host resolves the `Hubs` store
-entry a jb2hubs config names and loads the newest release.
+(`scripts/hosts.mjs`). A JBrowse 5 host resolves the `Hubs` store entry a
+jb2hubs config names and loads the newest release.
 
 JBrowse 4, web and desktop, keeps 1.0.18 for good. It ignores the store entry
 and loads the config's `latest/dist/jbrowse-plugin-hubs.umd.production.min.js`,

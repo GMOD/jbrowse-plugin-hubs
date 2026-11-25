@@ -1,14 +1,13 @@
 /**
  * Builds the bundle against what the oldest supported host serves, so an
  * import only a newer JBrowse provides fails here rather than as a throw in a
- * reader's browser. Raising FLOOR drops support for every host below it.
+ * reader's browser.
  */
 import { fetchHostNames } from '@jbrowse/core/ReExports/hostShim'
 import * as esbuild from 'esbuild'
 
 import { buildOptions } from './buildOptions.mjs'
-
-const FLOOR = 'v5.0.0-beta.18'
+import { FLOOR } from './hosts.mjs'
 
 const names = await fetchHostNames(FLOOR)
 try {
