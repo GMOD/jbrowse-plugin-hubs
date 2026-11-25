@@ -1,3 +1,13 @@
+## [2.0.1](https://github.com/GMOD/jbrowse-plugin-hubs/compare/v2.0.0...v2.0.1) (2026-11-25)
+
+### Chores
+
+- A changelog and GitHub release per version, and a tag publishes only past the gates ([af9883e](https://github.com/GMOD/jbrowse-plugin-hubs/commit/af9883e703ef532f3f1dd7ddc30b9e49a798bfb4))
+
+### Documentation
+
+- The store entry is ESM as of 2.0.0, so releasing needs no manifest edit ([5999de2](https://github.com/GMOD/jbrowse-plugin-hubs/commit/5999de2d9d4af82fad565b2d31f046ca13c78ef0))
+
 ## [2.0.0](https://github.com/GMOD/jbrowse-plugin-hubs/compare/v1.0.18...v2.0.0) (2026-11-25)
 
 ### Features
