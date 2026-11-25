@@ -24,8 +24,6 @@ as long as no release carries a file of that name (jbrowse-plugin-list ADR
 
 ## Releasing
 
-`pnpm version <patch|minor|major>` publishes to npm from CI. The first ESM
-release also needs the `Hubs` entry in jbrowse-plugin-list's `plugins.json` to
-trade `umdPath` for
-`"esmPath": "dist/jbrowse-plugin-hubs.esm.js", "jbrowseRange": ">=5.0.0"`,
-before `pnpm update-plugins`.
+`pnpm version <patch|minor|major>` publishes to npm from CI, and
+`pnpm update-plugins && pnpm verify && pnpm upload && pnpm invalidate` in
+jbrowse-plugin-list puts the release in the store.
