@@ -21,25 +21,19 @@ jobs:
         run: pnpm build
       - name: Lint
         run: pnpm lint
+      - name: Test
+        run: pnpm test
+      - name: Build against the oldest supported host
+        run: pnpm check-host-floor
       - name: Format check
         run: pnpm prettier --check .
 
-  # Boots the CANDIDATE build on hosted JBrowse releases against the ucsc configs
-  # that actually name this plugin.
-  #
-  # This is the check that was missing when 1.0.9 shipped `appendToMenu('File')`.
-  # Every released core from v4.0.0 to latest defines the File menu as a thunk and
-  # appends with `menu.menuItems.push()`, so configure() threw and hg38, hg19,
-  # mm39 and hs1 were error pages on every hosted release -- while core@main,
-  # which resolves menu contributions lazily, was perfectly happy. That asymmetry
-  # is the whole problem: the host you develop against is the one host that works.
-  #
-  # A throw out of configure() is invisible to tsc, eslint, and a url reachability
-  # check, and the store serves `latest/` no-cache, so the damage lands on configs
-  # shipped months ago the instant a tag is pushed. Verified this job fails on
-  # exactly that regression before it was added.
+  # Boots the candidate build on hosted JBrowse 5 releases against a ucsc config
+  # that names this plugin, and resolves a hosted genome through it. A throw out
+  # of configure() error-pages the whole session and is invisible to tsc, eslint
+  # and a url check, and a publish reaches configs shipped months ago at once.
   host-compat:
-    name: Host compat (candidate build on hosted releases)
+    name: Host compat (candidate build on hosted JBrowse 5 releases)
     needs: build-and-lint
     runs-on: ubuntu-latest
     steps:
@@ -55,7 +49,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build
         run: pnpm build
-      - name: Boot the built bundle on released hosts
+      - name: Boot the built bundle on hosted releases
         env:
           # preinstalled on the ubuntu runner image, so puppeteer-core needs no
           # browser action and no Chromium download

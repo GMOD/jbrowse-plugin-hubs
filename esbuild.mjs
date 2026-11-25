@@ -1,30 +1,13 @@
 import fs from 'node:fs'
 import http from 'node:http'
+
 import * as esbuild from 'esbuild'
-import { globalExternals } from '@fal-works/esbuild-plugin-global-externals'
-import JBrowseReExports from '@jbrowse/core/ReExports/list'
 import prettyBytes from 'pretty-bytes'
+
+import { buildOptions } from './scripts/buildOptions.mjs'
 
 const isWatch = process.argv.includes('--watch')
 const PORT = process.env.PORT ? +process.env.PORT : 9000
-
-function createGlobalMap(jbrowseGlobals) {
-  const globalMap = {}
-  for (const global of jbrowseGlobals) {
-    globalMap[global] = {
-      varName: `JBrowseExports["${global}"]`,
-      type: 'cjs',
-    }
-  }
-  // Map @jbrowse/mobx-state-tree to mobx-state-tree for backwards compatibility
-  // In v4.0.0+, JBrowse uses @jbrowse/mobx-state-tree but exports it as 'mobx-state-tree'
-  // In v3.x, JBrowse used mobx-state-tree directly
-  globalMap['@jbrowse/mobx-state-tree'] = {
-    varName: `JBrowseExports["mobx-state-tree"]`,
-    type: 'cjs',
-  }
-  return globalMap
-}
 
 const rebuildLogPlugin = {
   name: 'rebuild-log',
@@ -46,17 +29,14 @@ const rebuildLogPlugin = {
   },
 }
 
-const globals = JBrowseReExports
+const options = buildOptions()
 const config = {
-  entryPoints: ['src/index.ts'],
-  bundle: true,
-  globalName: 'JBrowsePluginHubs',
-  metafile: true,
-  plugins: [globalExternals(createGlobalMap(globals)), rebuildLogPlugin],
+  ...options,
+  plugins: [...options.plugins, rebuildLogPlugin],
   ...(isWatch
     ? { outfile: 'dist/out.js' }
     : {
-        outfile: 'dist/jbrowse-plugin-hubs.umd.production.min.js',
+        outfile: 'dist/jbrowse-plugin-hubs.esm.js',
         sourcemap: true,
         minify: true,
       }),

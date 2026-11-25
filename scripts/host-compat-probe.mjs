@@ -1,34 +1,23 @@
 #!/usr/bin/env node
 //
-// Boots a candidate umd build on hosted JBrowse releases and fails if any of
-// them cannot load it.
+// Boots a candidate build on hosted JBrowse 5 releases and fails if any of
+// them cannot load it, or cannot resolve a hosted genome through it.
 //
-// This plugin is named by `jbrowse.org/ucsc/*` configs, which live at permanent
-// urls that published links and old desktop installs keep loading, and the store
-// serves `latest/` with no-cache. So a publish is a live change to configs
-// shipped months ago, with no staging step in between.
+// This plugin is named by `jbrowse.org/ucsc/*` configs at permanent urls, and
+// the store serves its newest release to every JBrowse 5 host that opens one,
+// so a publish is a live change with no staging step. A bundle that throws
+// from configure() takes the whole session to the error page, which tsc,
+// eslint and a url check cannot see: 1.0.9 did that on every hosted release.
 //
-// `plugins[].url` is also the only config field that can kill a whole session
-// rather than one track: PluginLoader runs Promise.all over the plugin list, so
-// a bundle that throws while loading or configuring never defines its global,
-// the promise rejects, and every config naming it shows the app's error page.
-//
-// 1.0.9 shipped `appendToMenu('File', …)`, which every released core from v4.0.0
-// to latest rejects because it defines the File menu as a thunk and appends via
-// `menu.menuItems.push()`. hg38, hg19, mm39 and hs1 were error pages on every
-// hosted release until 1.0.11, and nothing here reported it -- a throw out of
-// configure() is invisible to tsc, eslint, and a url reachability check. This
-// makes it a build failure instead.
-//
-// Uses puppeteer-core rather than puppeteer so the repo does not carry a ~150MB
-// Chromium download for one check. Point CHROME_PATH at a browser, or let it
-// find a system Chrome or a puppeteer cache one.
+// JBrowse 4 hosts ignore the store and load the config's
+// `latest/dist/jbrowse-plugin-hubs.umd.production.min.js`, which is 1.0.18 for
+// good because no later release carries a file of that name
+// (jbrowse-plugin-list ADR 0009). FROZEN_UMD guards that.
 //
 // Usage:
-//   node scripts/host-compat-probe.mjs --bundle dist/jbrowse-plugin-hubs.umd.production.min.js
-//   node scripts/host-compat-probe.mjs --bundle … --versions v4.0.0,main
+//   node scripts/host-compat-probe.mjs --bundle dist/jbrowse-plugin-hubs.esm.js
+//   node scripts/host-compat-probe.mjs --bundle … --versions main
 //
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -36,19 +25,17 @@ import { parseArgs } from 'node:util'
 
 import { launch } from 'puppeteer-core'
 
-// The oldest entry is the support floor. `main` is included because a core
-// change lands there first, so an export a plugin depends on disappearing shows
-// up here before any release carries it.
-const DEFAULT_VERSIONS = ['v4.0.0', 'v4.3.0', 'latest', 'main']
+// The first entry is check-host-floor.mjs's FLOOR
+const DEFAULT_VERSIONS = ['v5.0.0-beta.18', 'v5.0.0-beta.23', 'main']
 
-// Real shipped configs that name this plugin, rather than a fixture: the point
-// is to reproduce what a user's url actually loads.
-const CONFIGS = {
-  hg38: 'https://jbrowse.org/ucsc/hg38/config.json',
-  hg19: 'https://jbrowse.org/ucsc/hg19/config.json',
-}
-const PLUGIN_GLOBAL = 'JBrowsePluginHubs'
+// A real shipped config that names this plugin by `storePlugin`, which a
+// JBrowse 5 host resolves through the store manifest rewritten below
+const CONFIG = 'https://jbrowse.org/ucsc/hg38/config.json'
+const UNKNOWN_HOSTED_GENOME = 'mm39'
+const STORE_NAME = 'Hubs'
+const PLUGIN_CLASS_NAME = 'HubsViewerPlugin'
 const PACKAGE_PATH = '/jbrowse-plugin-hubs/'
+const FROZEN_UMD = 'jbrowse-plugin-hubs.umd.production.min.js'
 
 function findChrome() {
   const candidates = [
@@ -77,96 +64,99 @@ const { values } = parseArgs({
   options: {
     bundle: { type: 'string' },
     versions: { type: 'string' },
-    configs: { type: 'string' },
     timeout: { type: 'string', default: '90000' },
     json: { type: 'string' },
   },
 })
 if (!values.bundle) {
-  throw new Error('--bundle <path to built umd> is required')
+  throw new Error('--bundle <path to the built ESM entry> is required')
 }
 const versions = values.versions?.split(',') ?? DEFAULT_VERSIONS
-const configNames = values.configs?.split(',') ?? Object.keys(CONFIGS)
 const timeout = Number(values.timeout)
-const bundle = fs.readFileSync(values.bundle, 'utf8')
-const bundleDir = path.dirname(values.bundle)
-const mainName = path.basename(values.bundle)
-const bundleIntegrity = `sha384-${crypto.createHash('sha384').update(bundle).digest('base64')}`
+const entryPath = values.bundle
+const entryName = path.basename(entryPath)
+const dist = path.dirname(entryPath)
+const candidateUrl = `https://jbrowse.org/plugins/@cmdcolin${PACKAGE_PATH}latest/dist/${entryName}`
 
-// A core that resolves `storePlugin` through the v2 store manifest loads the
-// version it pins with that version's integrity hash, which the candidate
-// fails by construction; this answers the manifest with the candidate's hash
-function withCandidateIntegrity(value) {
-  if (Array.isArray(value)) {
-    return value.map(withCandidateIntegrity)
-  }
-  if (typeof value === 'object' && value !== null) {
-    const out = Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        key,
-        withCandidateIntegrity(item),
-      ]),
-    )
-    return typeof out.url === 'string' &&
-      out.url.includes(PACKAGE_PATH) &&
-      'integrity' in out
-      ? { ...out, integrity: bundleIntegrity }
-      : out
-  }
-  return value
+if (fs.existsSync(path.join(dist, FROZEN_UMD))) {
+  throw new Error(
+    `${dist} holds ${FROZEN_UMD}: publishing it replaces the 1.0.18 build every JBrowse 4 host loads from latest/`,
+  )
 }
 
-async function storeManifest(url) {
-  const response = await fetch(url)
-  return JSON.stringify(withCandidateIntegrity(await response.json()))
+let entryRequests = 0
+let manifestPromise
+
+// Every build of this plugin becomes the ESM entry at its store path, the
+// shape the store publishes for an `esmPath` plugin
+function rewrittenStoreManifest(url) {
+  manifestPromise ??= (async () => {
+    const manifest = await (await fetch(url)).json()
+    for (const plugin of manifest.plugins ?? []) {
+      if (plugin.name === STORE_NAME) {
+        for (const build of [plugin, ...(plugin.versions ?? [])]) {
+          delete build.url
+          delete build.umdUrl
+          delete build.integrity
+          build.esmUrl = candidateUrl
+        }
+      }
+    }
+    return JSON.stringify(manifest)
+  })()
+  return manifestPromise
 }
 
-// Serves the whole local dist for the plugin's store path, not just the one
-// file: a build that code-splits fetches sibling chunks by their own hashed
-// names, and answering those with the main bundle produces a failure that looks
-// like a host incompatibility but is a probe bug.
+function candidateFile(url) {
+  const rel = new URL(url).pathname.split('/dist/').slice(1).join('/dist/')
+  const local = path.join(dist, rel)
+  if (rel === entryName) {
+    entryRequests += 1
+  }
+  return rel.endsWith('.js') && fs.existsSync(local) ? local : undefined
+}
+
+// Fetch patterns rather than page.setRequestInterception: the latter pauses
+// every request, including the RPC workers' own, which puppeteer never sees
+// and so never resumes
 async function serveCandidate(page) {
-  await page.setRequestInterception(true)
-  page.on('request', req => {
-    const url = req.url()
-    const { pathname } = new URL(url)
-    if (pathname.startsWith('/plugin-store/') && pathname.endsWith('.json')) {
-      storeManifest(url)
-        .then(body =>
-          req.respond({
-            status: 200,
-            contentType: 'application/json',
-            headers: { 'Access-Control-Allow-Origin': '*' },
-            body,
-          }),
-        )
-        .catch(() => req.continue().catch(() => {}))
-      return
+  const client = await page.createCDPSession()
+  client.on('Fetch.requestPaused', async ({ requestId, request }) => {
+    try {
+      const isManifest = /\/plugin-store\/.*plugins\.json/.test(request.url)
+      const file = isManifest ? undefined : candidateFile(request.url)
+      const body = isManifest
+        ? await rewrittenStoreManifest(request.url)
+        : file && fs.readFileSync(file, 'utf8')
+      await (body === undefined
+        ? client.send('Fetch.continueRequest', { requestId })
+        : client.send('Fetch.fulfillRequest', {
+            requestId,
+            responseCode: 200,
+            responseHeaders: [
+              {
+                name: 'Content-Type',
+                value: isManifest
+                  ? 'application/json'
+                  : 'application/javascript',
+              },
+              { name: 'Access-Control-Allow-Origin', value: '*' },
+            ],
+            body: Buffer.from(body).toString('base64'),
+          }))
+    } catch {
+      await client.send('Fetch.continueRequest', { requestId }).catch(() => {})
     }
-    const name = path.basename(pathname)
-    const sibling = path.join(bundleDir, name)
-    const isPluginAsset = url.includes(PACKAGE_PATH) && name.endsWith('.js')
-    const body = !isPluginAsset
-      ? undefined
-      : name !== mainName && fs.existsSync(sibling)
-        ? fs.readFileSync(sibling, 'utf8')
-        : bundle
-    if (body === undefined) {
-      req.continue().catch(() => {})
-    } else {
-      req
-        .respond({
-          status: 200,
-          contentType: 'application/javascript',
-          headers: { 'Access-Control-Allow-Origin': '*' },
-          body,
-        })
-        .catch(() => {})
-    }
+  })
+  await client.send('Fetch.enable', {
+    patterns: [
+      { urlPattern: `*${PACKAGE_PATH}*` },
+      { urlPattern: '*/plugin-store/*plugins.json*' },
+    ],
   })
 }
 
-async function probeOne(browser, version, configName) {
+async function probeOne(browser, version) {
   const page = await browser.newPage()
   await serveCandidate(page)
   const consoleErrors = []
@@ -179,10 +169,10 @@ async function probeOne(browser, version, configName) {
     consoleErrors.push(`pageerror: ${String(e).slice(0, 300)}`)
   })
 
-  const result = { version, config: configName, consoleErrors }
+  const result = { version, consoleErrors }
+  const entryRequestsBefore = entryRequests
   try {
-    const config = CONFIGS[configName]
-    const url = `https://jbrowse.org/code/jb2/${version}/?config=${encodeURIComponent(config)}`
+    const url = `https://jbrowse.org/code/jb2/${version}/?config=${encodeURIComponent(CONFIG)}`
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 })
 
     // Readiness is the session global or the error page. Do NOT wait on markup:
@@ -205,10 +195,32 @@ async function probeOne(browser, version, configName) {
         : undefined
     })
 
-    result.globalDefined = await page.evaluate(
-      name => name in window,
-      PLUGIN_GLOBAL,
+    result.registered = await page.evaluate(
+      name =>
+        !!window.JBrowseRootModel?.pluginManager?.plugins?.some(
+          p => p.name === name,
+        ),
+      PLUGIN_CLASS_NAME,
     )
+    result.candidateServed = entryRequests > entryRequestsBefore
+
+    // The plugin's whole job, and every request it makes is to jbrowse.org,
+    // the origin this page already depends on
+    result.resolved =
+      result.registered &&
+      (await page
+        .waitForFunction(
+          name => {
+            const { assemblyManager } =
+              window.JBrowseSession ?? window.__jbrowse_session
+            assemblyManager.get(name)
+            return assemblyManager.has(name)
+          },
+          { timeout: 30_000 },
+          UNKNOWN_HOSTED_GENOME,
+        )
+        .then(() => true)
+        .catch(() => false))
   } catch (e) {
     result.threw = String(e).slice(0, 300)
   }
@@ -221,11 +233,15 @@ function failure(r) {
     ? `SESSION FAILED: ${r.appError}`
     : r.threw
       ? `probe threw: ${r.threw}`
-      : r.settled
-        ? r.globalDefined
-          ? undefined
-          : `${PLUGIN_GLOBAL} is undefined (the bundle threw while evaluating)`
-        : 'never settled (no session and no error page)'
+      : !r.settled
+        ? 'never settled (no session and no error page)'
+        : !r.candidateServed
+          ? 'the host never requested the candidate entry (did the store ref resolve?)'
+          : !r.registered
+            ? `${PLUGIN_CLASS_NAME} is not registered (the bundle threw while evaluating)`
+            : r.resolved
+              ? undefined
+              : `${UNKNOWN_HOSTED_GENOME} never joined the session`
 }
 
 const browser = await launch({
@@ -235,19 +251,20 @@ const browser = await launch({
   defaultViewport: { width: 1400, height: 900 },
 })
 
-console.log(`serving ${values.bundle} as the Hubs plugin`)
+console.log(
+  `serving ${entryPath} as ${STORE_NAME} to ${CONFIG}\n` +
+    `hosts: ${versions.join(', ')}\n`,
+)
+
 const results = []
-for (const configName of configNames) {
-  console.log(`\n${configName}: ${CONFIGS[configName]}`)
-  for (const version of versions) {
-    const r = await probeOne(browser, version, configName)
-    results.push(r)
-    const bad = failure(r)
-    console.log(`  ${version.padEnd(10)} ${bad ?? 'ok'}`)
-    if (bad) {
-      for (const e of [...new Set(r.consoleErrors)].slice(0, 4)) {
-        console.log(`             · ${e}`)
-      }
+for (const version of versions) {
+  const r = await probeOne(browser, version)
+  results.push(r)
+  const bad = failure(r)
+  console.log(`${version.padEnd(16)} ${bad ?? 'ok'}`)
+  if (bad) {
+    for (const e of [...new Set(r.consoleErrors)].slice(0, 4)) {
+      console.log(`                 · ${e}`)
     }
   }
 }
@@ -257,11 +274,11 @@ if (values.json) {
   fs.writeFileSync(values.json, JSON.stringify(results, null, 2))
 }
 
-const broken = results.filter(r => failure(r))
+const broken = results.filter(r => failure(r)).map(r => r.version)
 if (broken.length > 0) {
-  console.error(
-    `\nFailed on: ${broken.map(r => `${r.config}@${r.version}`).join(', ')}`,
-  )
+  console.error(`\nFailed on: ${broken.join(', ')}`)
   process.exit(1)
 }
-console.log('\nAll probed hosts loaded the bundle.')
+console.log(
+  '\nAll probed hosts loaded the bundle and resolved a hosted genome.',
+)
